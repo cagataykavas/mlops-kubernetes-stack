@@ -1,0 +1,24 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: model-api
+  labels:
+    app: model-api
+spec:
+  selector:
+    matchLabels:
+      app: model-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: model-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: model-api
