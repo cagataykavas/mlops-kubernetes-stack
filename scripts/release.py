@@ -17,7 +17,7 @@ def deploy(image: str, namespace: str, timeout: str) -> None:
         "kubectl",
         "set",
         "image",
-        f"deployment/ml-model-service",
+        "deployment/ml-model-service",
         f"api={image}",
         "-n",
         namespace,
