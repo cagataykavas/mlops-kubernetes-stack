@@ -11,9 +11,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r requirements.txt ruff pytest
+          cache: pip
+      - run: pip install -r requirements.txt
       - run: ruff check .
       - run: pytest -q
+      - run: python scripts/validate_manifests.py
+      - run: python train_model.py
+      - run: python -c "from app import readiness; assert readiness()['status'] == 'ready'"
 
   container:
     runs-on: ubuntu-latest
@@ -24,4 +28,14 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: model-api:ci
+      - run: docker run -d --name model-api -p 8000:8000 model-api:ci
+      - run: |
+          for i in {1..30}; do
+            if curl -fsS http://localhost:8000/health/ready; then exit 0; fi
+            sleep 1
+          done
+          docker logs model-api
+          exit 1
+      - run: curl -fsS http://localhost:8000/metrics | grep ml_model_ready
