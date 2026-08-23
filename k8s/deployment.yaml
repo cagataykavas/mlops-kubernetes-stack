@@ -4,6 +4,8 @@ metadata:
   name: ml-model-service
   labels:
     app: ml-model-service
+    app.kubernetes.io/name: ml-model-service
+    app.kubernetes.io/version: "v1"
 spec:
   replicas: 2
   revisionHistoryLimit: 5
@@ -19,6 +21,8 @@ spec:
     metadata:
       labels:
         app: ml-model-service
+        app.kubernetes.io/name: ml-model-service
+        app.kubernetes.io/version: "v1"
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: /metrics
