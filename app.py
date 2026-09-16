@@ -6,7 +6,13 @@ from pathlib import Path
 
 import joblib
 from fastapi import FastAPI, HTTPException, Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 from pydantic import BaseModel, Field
 
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "artifacts/model.joblib"))
