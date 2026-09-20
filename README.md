@@ -40,6 +40,7 @@ flowchart LR
 - dropped Linux capabilities, read-only root filesystem and seccomp runtime-default;
 - pre-stop delay and termination grace period for draining;
 - rollout helper with automatic rollback when deployment status fails;
+- canary promotion gate for traffic sufficiency, error rate and p95 latency;
 - CI that runs tests, Ruff, manifest checks, Docker build and container health/metrics smoke tests.
 
 ## Local run
@@ -95,6 +96,35 @@ Manual rollback is also available:
 python scripts/release.py rollback --namespace ml
 ```
 
+### Canary quality gate
+
+Kubernetes readiness proves that a candidate can serve requests; it does not prove that the
+candidate is safe to promote. `scripts/canary_gate.py` evaluates a fixed observation window
+for the baseline and candidate model versions before full rollout.
+
+The gate requires minimum traffic and enforces both absolute and relative budgets:
+
+- maximum candidate error rate;
+- maximum error-rate increase over baseline;
+- maximum candidate/baseline p95 latency ratio;
+- distinct model-version evidence.
+
+It reports all violations deterministically in a JSON-ready decision. Invalid or incomplete
+evidence fails closed. Example library usage:
+
+```python
+from scripts.canary_gate import CanaryPolicy, evaluate_file
+
+decision = evaluate_file("canary-evidence.json", CanaryPolicy(min_requests=1000))
+if not decision.promote:
+    raise SystemExit(decision.to_dict())
+```
+
+The input contains aggregate window evidence, not synthetic benchmark claims. Producing those
+aggregates from Prometheus and wiring the decision to traffic shifting are deployment-specific
+responsibilities. Error-rate comparisons are deterministic policy checks, not statistical
+significance tests; low-traffic windows are rejected rather than over-interpreted.
+
 ## Health semantics
 
 `/health/live` only answers whether the process is alive. `/health/ready` additionally requires the model artifact to be loaded. Kubernetes therefore stops routing traffic to an unready model without necessarily restarting a healthy process.
@@ -122,4 +152,4 @@ This gives the repository enough structure to discuss request rate, latency dist
 
 This project is designed to support concrete discussion of:
 
-**Docker layers · Kubernetes Deployment/Service · probes · HPA · requests vs limits · rolling updates · rollback · PDB · NetworkPolicy · Prometheus · immutable image tags · CI/CD · graceful termination · readiness vs liveness.**
+**Docker layers · Kubernetes Deployment/Service · probes · HPA · requests vs limits · rolling updates · canary gates · rollback · PDB · NetworkPolicy · Prometheus · immutable image tags · CI/CD · graceful termination · readiness vs liveness.**
