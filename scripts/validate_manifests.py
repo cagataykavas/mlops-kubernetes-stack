@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 import yaml
 
@@ -114,10 +115,11 @@ def _has_explicit_non_latest_image(image: Any) -> bool:
 
 def evaluate_documents(
     documents: Sequence[Mapping[str, Any]],
-    policy: AdmissionPolicy = AdmissionPolicy(),
+    policy: AdmissionPolicy | None = None,
 ) -> AdmissionReport:
     if not documents:
         raise ManifestInputError("documents must not be empty")
+    policy = policy or AdmissionPolicy()
 
     violations: list[PolicyViolation] = []
     identities: set[tuple[str, str, str]] = set()
@@ -386,14 +388,17 @@ def evaluate_documents(
                 "minAvailable or maxUnavailable is required",
             )
         minimum = spec.get("minAvailable")
-        if isinstance(minimum, int) and targets:
-            if minimum < 1 or any(minimum > deployment_replicas.get(name, 0) for name in targets):
-                reject(
-                    "invalid_disruption_budget",
-                    resource,
-                    "spec.minAvailable",
-                    "must preserve at least one pod without exceeding replicas",
-                )
+        if (
+            isinstance(minimum, int)
+            and targets
+            and (minimum < 1 or any(minimum > deployment_replicas.get(name, 0) for name in targets))
+        ):
+            reject(
+                "invalid_disruption_budget",
+                resource,
+                "spec.minAvailable",
+                "must preserve at least one pod without exceeding replicas",
+            )
 
     network_targets: set[str] = set()
     for network_policy in indexed.get("NetworkPolicy", []):
