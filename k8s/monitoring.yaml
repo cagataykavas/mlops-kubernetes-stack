@@ -1,24 +1,14 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: model-api
+  name: ml-model-service
   labels:
-    app: model-api
+    app: ml-model-service
 spec:
   selector:
     matchLabels:
-      app: model-api
+      app: ml-model-service
   endpoints:
     - port: http
       path: /metrics
       interval: 15s
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: model-api
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: model-api
