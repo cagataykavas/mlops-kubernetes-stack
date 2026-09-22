@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+
 from scripts.validate_manifests import (
     AdmissionPolicy,
     ManifestInputError,
