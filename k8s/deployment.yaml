@@ -35,7 +35,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: ghcr.io/cagataykavas/mlops-kubernetes-stack:latest
+          # The release helper replaces this explicit bootstrap tag with a digest-pinned image.
+          image: ghcr.io/cagataykavas/mlops-kubernetes-stack:v1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
