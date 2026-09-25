@@ -6,17 +6,16 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from scripts.release_lock import (
-    KubectlLeaseBackend,
-    LeaseBackendError,
-    LeaseCoordinator,
-    LeaseEvidenceError,
-    LeaseHeldError,
-    LeasePolicy,
-    LeaseRaceError,
-)
 
 from scripts import release_lock
+
+KubectlLeaseBackend = release_lock.KubectlLeaseBackend
+LeaseBackendError = release_lock.LeaseBackendError
+LeaseCoordinator = release_lock.LeaseCoordinator
+LeaseEvidenceError = release_lock.LeaseEvidenceError
+LeaseHeldError = release_lock.LeaseHeldError
+LeasePolicy = release_lock.LeasePolicy
+LeaseRaceError = release_lock.LeaseRaceError
 
 NOW = datetime(2026, 9, 25, 17, 0, tzinfo=UTC)
 

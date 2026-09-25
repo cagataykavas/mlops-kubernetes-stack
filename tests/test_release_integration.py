@@ -4,9 +4,10 @@ import sys
 from typing import ClassVar
 
 import pytest
-from scripts.release_lock import LeaseHeldError
 
-from scripts import release
+from scripts import release, release_lock
+
+LeaseHeldError = release_lock.LeaseHeldError
 
 
 class FakeCoordinator:

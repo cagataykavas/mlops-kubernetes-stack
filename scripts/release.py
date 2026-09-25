@@ -8,9 +8,19 @@ import subprocess
 import sys
 
 if __package__:
-    from .release_lock import KubectlLeaseBackend, LeaseCoordinator, LeaseError, LeasePolicy
+    from .release_lock import (
+        KubectlLeaseBackend,
+        LeaseCoordinator,
+        LeaseError,
+        LeasePolicy,
+    )
 else:
-    from release_lock import KubectlLeaseBackend, LeaseCoordinator, LeaseError, LeasePolicy
+    from release_lock import (
+        KubectlLeaseBackend,
+        LeaseCoordinator,
+        LeaseError,
+        LeasePolicy,
+    )
 
 
 def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
