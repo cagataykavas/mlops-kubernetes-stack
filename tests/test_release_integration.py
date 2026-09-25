@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import release, release_lock
 

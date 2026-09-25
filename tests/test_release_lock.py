@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import release_lock
 
