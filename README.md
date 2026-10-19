@@ -99,11 +99,36 @@ python scripts/release.py rollback --namespace ml
 
 `/health/live` only answers whether the process is alive. `/health/ready` additionally requires the model artifact to be loaded. Kubernetes therefore stops routing traffic to an unready model without necessarily restarting a healthy process.
 
+## Inference output contract
+
+`/predict` admits only binary classifiers whose `classes_` contains the integer
+labels `0` and `1`. The positive-class column is resolved by label, so reversed
+class ordering cannot silently invert the prediction. `predict_proba` must return
+one numeric row of two finite probabilities in `[0, 1]`, summing to one within
+an absolute tolerance of `1e-6` (no relative tolerance).
+
+Model exceptions and invalid outputs return HTTP `503` with the stable message
+`model inference unavailable`; raw model exception text is not sent to clients.
+Rejected attempts increment `ml_prediction_failures_total`, do not increment the
+success counter, and still contribute to inference latency. Missing artifacts
+return `503` before inference and are represented by readiness, not this counter.
+An invalid output does not unload the model or change readiness: readiness still
+means artifact-loaded, not model-quality-approved.
+
+This boundary validates response integrity, not calibration, predictive quality,
+artifact provenance, feature ranges, or inference time/resource limits. Only load
+trusted joblib artifacts; this check does not make deserialization safe.
+
+Validate locally with `python -m pytest -q` and `ruff check .`. API tests include
+malformed model outputs, reversed class ordering, exception redaction, metric
+accounting, and inference with the actual deterministic training artifact.
+
 ## Observability
 
 `/metrics` is Prometheus text format and exposes:
 
 - `ml_predictions_total{predicted_class,model_version}`;
+- `ml_prediction_failures_total` for model errors and rejected outputs;
 - `ml_prediction_latency_seconds` histogram;
 - `ml_model_ready` gauge.
 

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import joblib
+import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -23,6 +24,10 @@ PREDICTIONS = Counter(
     "ml_predictions_total",
     "Number of prediction requests",
     labelnames=("predicted_class", "model_version"),
+)
+PREDICTION_FAILURES = Counter(
+    "ml_prediction_failures_total",
+    "Inference attempts rejected due to model errors or invalid output",
 )
 LATENCY = Histogram(
     "ml_prediction_latency_seconds",
@@ -68,11 +73,19 @@ def metrics() -> Response:
 @app.post("/predict")
 def predict(payload: PredictionRequest) -> dict:
     if MODEL is None:
-        raise HTTPException(status_code=503, detail="model artifact not found; run train_model.py first")
+        raise HTTPException(
+            status_code=503, detail="model artifact not found; run train_model.py first"
+        )
 
     started = time.perf_counter()
     try:
-        probability = float(MODEL.predict_proba([payload.features])[0, 1])
+        try:
+            probability = validated_probability(MODEL, payload.features)
+        except Exception:  # noqa: BLE001 -- contain arbitrary model execution errors at the API boundary
+            PREDICTION_FAILURES.inc()
+            raise HTTPException(
+                status_code=503, detail="model inference unavailable"
+            ) from None
         predicted_class = int(probability >= 0.5)
         PREDICTIONS.labels(str(predicted_class), MODEL_VERSION).inc()
         return {
@@ -82,3 +95,26 @@ def predict(payload: PredictionRequest) -> dict:
         }
     finally:
         LATENCY.observe(time.perf_counter() - started)
+
+
+def validated_probability(model, features: list[float]) -> float:
+    """Enforce the binary 0/1 classifier contract before publishing a prediction."""
+    classes = np.asarray(model.classes_)
+    if (
+        classes.shape != (2,)
+        or classes.dtype.kind not in "iu"
+        or set(classes.tolist()) != {0, 1}
+    ):
+        raise ValueError("expected integer class labels 0 and 1")
+
+    probabilities = np.asarray(model.predict_proba([features]))
+    if (
+        probabilities.shape != (1, 2)
+        or probabilities.dtype.kind not in "fiu"
+        or not np.isfinite(probabilities).all()
+        or not ((probabilities >= 0) & (probabilities <= 1)).all()
+        or not np.isclose(probabilities.sum(), 1.0, rtol=0, atol=1e-6)
+    ):
+        raise ValueError("expected one normalized binary probability row")
+    positive_column = int(np.flatnonzero(classes == 1)[0])
+    return float(probabilities[0, positive_column])
