@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import joblib
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
@@ -14,11 +17,14 @@ from prometheus_client import (
     Histogram,
     generate_latest,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, field_validator
+from starlette.requests import Request
 
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "artifacts/model.joblib"))
 MODEL_VERSION = os.getenv("MODEL_VERSION", "local-dev")
 MODEL = joblib.load(MODEL_PATH) if MODEL_PATH.exists() else None
+FEATURE_COUNT = 4
+MAX_ABS_FEATURE_VALUE = 8.0
 
 PREDICTIONS = Counter(
     "ml_predictions_total",
@@ -28,6 +34,10 @@ PREDICTIONS = Counter(
 PREDICTION_FAILURES = Counter(
     "ml_prediction_failures_total",
     "Inference attempts rejected due to model errors or invalid output",
+)
+PREDICTION_REJECTIONS = Counter(
+    "ml_prediction_request_rejections_total",
+    "Prediction requests rejected before model execution",
 )
 LATENCY = Histogram(
     "ml_prediction_latency_seconds",
@@ -41,7 +51,44 @@ app = FastAPI(title="MLOps Kubernetes Stack", version="2.0.0")
 
 
 class PredictionRequest(BaseModel):
-    features: list[float] = Field(min_length=4, max_length=4)
+    model_config = ConfigDict(extra="forbid")
+
+    features: list[float]
+
+    @field_validator("features", mode="before")
+    @classmethod
+    def validate_features(cls, value: object) -> list[float]:
+        if not isinstance(value, list) or len(value) != FEATURE_COUNT:
+            raise ValueError(f"features must contain exactly {FEATURE_COUNT} values")
+        admitted: list[float] = []
+        for item in value:
+            if isinstance(item, bool) or not isinstance(item, (int, float)):
+                # Pydantic converts ValueError from validators into a structured
+                # request error; TypeError would escape as an internal failure.
+                raise ValueError(  # noqa: TRY004
+                    "features must contain JSON numbers"
+                )
+            number = float(item)
+            if not math.isfinite(number):
+                raise ValueError("features must be finite")
+            if abs(number) > MAX_ABS_FEATURE_VALUE:
+                raise ValueError("feature exceeds the admitted absolute bound")
+            admitted.append(number)
+        return admitted
+
+
+@app.exception_handler(RequestValidationError)
+async def prediction_request_rejected(
+    request: Request, error: RequestValidationError
+) -> JSONResponse:
+    del error
+    if request.url.path == "/predict":
+        PREDICTION_REJECTIONS.inc()
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "invalid prediction request"},
+        )
+    return JSONResponse(status_code=422, content={"detail": "invalid request"})
 
 
 @app.get("/health/live")

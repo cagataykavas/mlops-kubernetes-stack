@@ -46,6 +46,10 @@ def counts(service):
     )
 
 
+def request_rejections(service):
+    return REGISTRY.get_sample_value("ml_prediction_request_rejections_total") or 0
+
+
 @pytest.mark.parametrize(
     ("classes", "output", "probability", "label"),
     [
@@ -70,6 +74,91 @@ def test_admitted_output(
         "model_version": service.MODEL_VERSION,
     }
     assert counts(service) == (before[0] + 1, before[1], before[2] + 1)
+
+
+def test_request_boundaries_are_admitted(client, service, monkeypatch):
+    captured = []
+
+    def predict_proba(rows):
+        captured.extend(rows)
+        return [[0.25, 0.75]]
+
+    monkeypatch.setattr(
+        service,
+        "MODEL",
+        SimpleNamespace(classes_=np.asarray([0, 1]), predict_proba=predict_proba),
+    )
+    response = client.post(
+        "/predict",
+        json={"features": [service.MAX_ABS_FEATURE_VALUE, -8, 0, 1]},
+    )
+
+    assert response.status_code == 200
+    assert captured == [[8.0, -8.0, 0.0, 1.0]]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"features": [0.2, 0.4, 0.8]},
+        {"features": [0.2, 0.4, 0.8, 0.1, 0.0]},
+        {"features": [8.000001, 0.4, 0.8, 0.1]},
+        {"features": [True, 0.4, 0.8, 0.1]},
+        {"features": ["0.2", 0.4, 0.8, 0.1]},
+        {"features": [None, 0.4, 0.8, 0.1]},
+        {"features": {"0": 0.2, "1": 0.4, "2": 0.8, "3": 0.1}},
+        {"features": [0.2, 0.4, 0.8, 0.1], "debug": "sensitive-input"},
+        {},
+    ],
+)
+def test_invalid_request_is_rejected_before_inference(
+    client, service, monkeypatch, payload
+):
+    def must_not_run(_):
+        pytest.fail("invalid requests must not reach model execution")
+
+    monkeypatch.setattr(
+        service,
+        "MODEL",
+        SimpleNamespace(classes_=np.asarray([0, 1]), predict_proba=must_not_run),
+    )
+    before_inference = counts(service)
+    before_rejections = request_rejections(service)
+
+    response = client.post("/predict", json=payload)
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid prediction request"}
+    assert "sensitive-input" not in response.text
+    assert counts(service) == before_inference
+    assert request_rejections(service) == before_rejections + 1
+
+
+@pytest.mark.parametrize("raw_value", ["NaN", "Infinity", "-Infinity"])
+def test_nonfinite_json_is_rejected_before_inference(
+    client, service, monkeypatch, raw_value
+):
+    def must_not_run(_):
+        pytest.fail("non-finite requests must not reach model execution")
+
+    monkeypatch.setattr(
+        service,
+        "MODEL",
+        SimpleNamespace(classes_=np.asarray([0, 1]), predict_proba=must_not_run),
+    )
+    before_inference = counts(service)
+    before_rejections = request_rejections(service)
+
+    response = client.post(
+        "/predict",
+        content=f'{{"features":[{raw_value},0.4,0.8,0.1]}}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid prediction request"}
+    assert counts(service) == before_inference
+    assert request_rejections(service) == before_rejections + 1
 
 
 @pytest.mark.parametrize(
