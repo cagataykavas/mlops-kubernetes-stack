@@ -28,6 +28,7 @@ flowchart LR
 ## What is implemented
 
 - deterministic scikit-learn training artifact;
+- fail-closed artifact digest and model-contract verification before deserialization;
 - FastAPI prediction service;
 - separate liveness, readiness and startup probes;
 - Prometheus counters, histogram latency and model-readiness gauge;
@@ -97,7 +98,27 @@ python scripts/release.py rollback --namespace ml
 
 ## Health semantics
 
-`/health/live` only answers whether the process is alive. `/health/ready` additionally requires the model artifact to be loaded. Kubernetes therefore stops routing traffic to an unready model without necessarily restarting a healthy process.
+`/health/live` only answers whether the process is alive. `/health/ready`
+additionally requires the model artifact and its generated manifest to pass digest,
+byte-size, model-type, feature-count, and class-label checks before deserialization.
+Kubernetes therefore stops routing traffic to a missing, corrupted, or
+contract-incompatible model without necessarily restarting a healthy process.
+
+## Artifact contract
+
+`train_model.py` writes `model.joblib` plus a deterministic, bounded
+`model.manifest.json`. Startup reads the artifact once from a regular, non-symlink
+file, verifies its exact byte length and SHA-256, deserializes those already-verified
+bytes, and reconciles `n_features_in_`, binary classes, and the fully qualified
+model type with the manifest. Missing, malformed, duplicated-field, oversized,
+mutated, digest-mismatched, or contract-incompatible evidence leaves the pod unready.
+
+This detects accidental corruption and drift between separately delivered artifact
+and manifest files. It does **not** authenticate who approved the manifest: paired
+replacement of both files remains possible unless the manifest digest or signature is
+bound to an immutable image/deployment attestation. Joblib is a code-execution format;
+only artifacts from a trusted build pipeline should enter this verifier. A production
+next step is to sign the manifest and enforce its identity at deployment admission.
 
 ## Inference output contract
 
@@ -123,7 +144,7 @@ An invalid output does not unload the model or change readiness: readiness still
 means artifact-loaded, not model-quality-approved.
 
 This boundary validates request and response integrity, not calibration,
-predictive quality, artifact provenance, semantic feature meaning, distribution
+predictive quality, artifact authorship, semantic feature meaning, distribution
 shift, or inference time/resource limits. The `[-8, 8]` policy is appropriate only
 for this synthetic standardized model and must be replaced with versioned,
 training-derived feature contracts in a real service. Only load trusted joblib

@@ -5,7 +5,6 @@ import os
 import time
 from pathlib import Path
 
-import joblib
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.exceptions import RequestValidationError
@@ -20,9 +19,24 @@ from prometheus_client import (
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.requests import Request
 
+from artifact_contract import ArtifactContractError, load_verified_model
+
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "artifacts/model.joblib"))
+MODEL_MANIFEST_PATH = Path(
+    os.getenv("MODEL_MANIFEST_PATH", "artifacts/model.manifest.json")
+)
 MODEL_VERSION = os.getenv("MODEL_VERSION", "local-dev")
-MODEL = joblib.load(MODEL_PATH) if MODEL_PATH.exists() else None
+
+
+def load_model() -> object | None:
+    try:
+        model, _ = load_verified_model(MODEL_PATH, MODEL_MANIFEST_PATH)
+    except ArtifactContractError:
+        return None
+    return model
+
+
+MODEL = load_model()
 FEATURE_COUNT = 4
 MAX_ABS_FEATURE_VALUE = 8.0
 

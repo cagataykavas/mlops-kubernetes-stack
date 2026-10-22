@@ -246,3 +246,22 @@ def test_actual_trained_artifact(client, service, monkeypatch, tmp_path):
     expected = model.predict_proba([FEATURES["features"]])[0, 1]
     assert response.json()["probability"] == pytest.approx(expected)
     assert response.json()["class"] == int(expected >= 0.5)
+
+
+def test_service_loader_fails_closed_on_tampered_artifact(
+    service, monkeypatch, tmp_path
+):
+    path = Path(__file__).resolve().parents[1] / "train_model.py"
+    spec = spec_from_file_location("training_for_loader", path)
+    training = module_from_spec(spec)
+    spec.loader.exec_module(training)
+    monkeypatch.chdir(tmp_path)
+    training.main()
+    artifact_path = tmp_path / "artifacts/model.joblib"
+    manifest_path = tmp_path / "artifacts/model.manifest.json"
+    monkeypatch.setattr(service, "MODEL_PATH", artifact_path)
+    monkeypatch.setattr(service, "MODEL_MANIFEST_PATH", manifest_path)
+
+    assert service.load_model() is not None
+    artifact_path.write_bytes(artifact_path.read_bytes() + b"tamper")
+    assert service.load_model() is None

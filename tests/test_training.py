@@ -20,7 +20,9 @@ def test_training_creates_model(tmp_path, monkeypatch):
     main()
 
     model_path = Path("artifacts/model.joblib")
+    manifest_path = Path("artifacts/model.manifest.json")
     assert model_path.exists()
+    assert manifest_path.exists()
 
     model = joblib.load(model_path)
     probability = model.predict_proba([[0.0, 0.0, 0.0, 0.0]])[0, 1]
