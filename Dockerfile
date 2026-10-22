@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY train_model.py app.py ./
+COPY artifact_contract.py train_model.py app.py ./
 RUN python train_model.py \
     && useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app

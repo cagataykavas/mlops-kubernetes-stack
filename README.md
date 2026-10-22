@@ -28,6 +28,7 @@ flowchart LR
 ## What is implemented
 
 - deterministic scikit-learn training artifact;
+- fail-closed artifact digest and model-contract verification before deserialization;
 - FastAPI prediction service;
 - separate liveness, readiness and startup probes;
 - Prometheus counters, histogram latency and model-readiness gauge;
@@ -97,13 +98,69 @@ python scripts/release.py rollback --namespace ml
 
 ## Health semantics
 
-`/health/live` only answers whether the process is alive. `/health/ready` additionally requires the model artifact to be loaded. Kubernetes therefore stops routing traffic to an unready model without necessarily restarting a healthy process.
+`/health/live` only answers whether the process is alive. `/health/ready`
+additionally requires the model artifact and its generated manifest to pass digest,
+byte-size, model-type, feature-count, and class-label checks before deserialization.
+Kubernetes therefore stops routing traffic to a missing, corrupted, or
+contract-incompatible model without necessarily restarting a healthy process.
+
+## Artifact contract
+
+`train_model.py` writes `model.joblib` plus a deterministic, bounded
+`model.manifest.json`. Startup reads the artifact once from a regular, non-symlink
+file, verifies its exact byte length and SHA-256, deserializes those already-verified
+bytes, and reconciles `n_features_in_`, binary classes, and the fully qualified
+model type with the manifest. Missing, malformed, duplicated-field, oversized,
+mutated, digest-mismatched, or contract-incompatible evidence leaves the pod unready.
+
+This detects accidental corruption and drift between separately delivered artifact
+and manifest files. It does **not** authenticate who approved the manifest: paired
+replacement of both files remains possible unless the manifest digest or signature is
+bound to an immutable image/deployment attestation. Joblib is a code-execution format;
+only artifacts from a trusted build pipeline should enter this verifier. A production
+next step is to sign the manifest and enforce its identity at deployment admission.
+
+## Inference output contract
+
+Before model execution, `/predict` requires exactly four JSON numbers. Boolean,
+string, null, NaN, infinity, extra-field, and wrong-length inputs are rejected,
+as are values outside the demo model's prespecified standardized range `[-8, 8]`.
+Invalid requests return a stable HTTP `422` response without reflecting submitted
+values and increment `ml_prediction_request_rejections_total`; they do not execute
+the model or contaminate inference success, failure, or latency metrics.
+
+`/predict` admits only binary classifiers whose `classes_` contains the integer
+labels `0` and `1`. The positive-class column is resolved by label, so reversed
+class ordering cannot silently invert the prediction. `predict_proba` must return
+one numeric row of two finite probabilities in `[0, 1]`, summing to one within
+an absolute tolerance of `1e-6` (no relative tolerance).
+
+Model exceptions and invalid outputs return HTTP `503` with the stable message
+`model inference unavailable`; raw model exception text is not sent to clients.
+Rejected attempts increment `ml_prediction_failures_total`, do not increment the
+success counter, and still contribute to inference latency. Missing artifacts
+return `503` before inference and are represented by readiness, not this counter.
+An invalid output does not unload the model or change readiness: readiness still
+means artifact-loaded, not model-quality-approved.
+
+This boundary validates request and response integrity, not calibration,
+predictive quality, artifact authorship, semantic feature meaning, distribution
+shift, or inference time/resource limits. The `[-8, 8]` policy is appropriate only
+for this synthetic standardized model and must be replaced with versioned,
+training-derived feature contracts in a real service. Only load trusted joblib
+artifacts; these checks do not make deserialization safe.
+
+Validate locally with `python -m pytest -q` and `ruff check .`. API tests include
+malformed model outputs, reversed class ordering, exception redaction, metric
+accounting, and inference with the actual deterministic training artifact.
 
 ## Observability
 
 `/metrics` is Prometheus text format and exposes:
 
 - `ml_predictions_total{predicted_class,model_version}`;
+- `ml_prediction_failures_total` for model errors and rejected outputs;
+- `ml_prediction_request_rejections_total` for pre-inference input rejection;
 - `ml_prediction_latency_seconds` histogram;
 - `ml_model_ready` gauge.
 
