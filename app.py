@@ -19,18 +19,43 @@ from prometheus_client import (
 from pydantic import BaseModel, ConfigDict, field_validator
 from starlette.requests import Request
 
-from artifact_contract import ArtifactContractError, load_verified_model
+from artifact_contract import (
+    ArtifactContractError,
+    ManifestTrustPolicy,
+    load_verified_model,
+)
 
 MODEL_PATH = Path(os.getenv("MODEL_PATH", "artifacts/model.joblib"))
 MODEL_MANIFEST_PATH = Path(
     os.getenv("MODEL_MANIFEST_PATH", "artifacts/model.manifest.json")
 )
 MODEL_VERSION = os.getenv("MODEL_VERSION", "local-dev")
+REQUIRE_SIGNED_MANIFEST = os.getenv("REQUIRE_SIGNED_MANIFEST", "false")
+MODEL_MANIFEST_SIGNATURE_PATH = Path(
+    os.getenv("MODEL_MANIFEST_SIGNATURE_PATH", "artifacts/model.manifest.sig.json")
+)
+MODEL_MANIFEST_SIGNING_KEY_ID = os.getenv("MODEL_MANIFEST_SIGNING_KEY_ID", "")
+MODEL_MANIFEST_PUBLIC_KEY_HEX = os.getenv("MODEL_MANIFEST_PUBLIC_KEY_HEX", "")
 
 
 def load_model() -> object | None:
     try:
-        model, _ = load_verified_model(MODEL_PATH, MODEL_MANIFEST_PATH)
+        if REQUIRE_SIGNED_MANIFEST not in {"true", "false"}:
+            raise ArtifactContractError("REQUIRE_SIGNED_MANIFEST must be true or false")
+        trust_policy = None
+        signature_path = None
+        if REQUIRE_SIGNED_MANIFEST == "true":
+            trust_policy = ManifestTrustPolicy(
+                key_id=MODEL_MANIFEST_SIGNING_KEY_ID,
+                public_key_hex=MODEL_MANIFEST_PUBLIC_KEY_HEX,
+            )
+            signature_path = MODEL_MANIFEST_SIGNATURE_PATH
+        model, _ = load_verified_model(
+            MODEL_PATH,
+            MODEL_MANIFEST_PATH,
+            trust_policy=trust_policy,
+            signature_path=signature_path,
+        )
     except ArtifactContractError:
         return None
     return model

@@ -1,3 +1,5 @@
+import hashlib
+import json
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from types import SimpleNamespace
@@ -5,6 +7,8 @@ from types import SimpleNamespace
 import joblib
 import numpy as np
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 from prometheus_client import REGISTRY
 
@@ -264,4 +268,49 @@ def test_service_loader_fails_closed_on_tampered_artifact(
 
     assert service.load_model() is not None
     artifact_path.write_bytes(artifact_path.read_bytes() + b"tamper")
+    assert service.load_model() is None
+
+
+def test_service_can_require_a_trusted_manifest_signature(
+    service, monkeypatch, tmp_path
+):
+    path = Path(__file__).resolve().parents[1] / "train_model.py"
+    spec = spec_from_file_location("training_for_signed_loader", path)
+    training = module_from_spec(spec)
+    spec.loader.exec_module(training)
+    monkeypatch.chdir(tmp_path)
+    training.main()
+    artifact_path = tmp_path / "artifacts/model.joblib"
+    manifest_path = tmp_path / "artifacts/model.manifest.json"
+    signature_path = tmp_path / "artifacts/model.manifest.sig.json"
+    private_key = Ed25519PrivateKey.generate()
+    public_key_hex = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        .hex()
+    )
+    manifest_bytes = manifest_path.read_bytes()
+    signature_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "algorithm": "ed25519",
+                "key_id": "release-signer-v1",
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "signature_hex": private_key.sign(manifest_bytes).hex(),
+            }
+        )
+    )
+    monkeypatch.setattr(service, "MODEL_PATH", artifact_path)
+    monkeypatch.setattr(service, "MODEL_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(service, "MODEL_MANIFEST_SIGNATURE_PATH", signature_path)
+    monkeypatch.setattr(service, "REQUIRE_SIGNED_MANIFEST", "true")
+    monkeypatch.setattr(service, "MODEL_MANIFEST_SIGNING_KEY_ID", "release-signer-v1")
+    monkeypatch.setattr(service, "MODEL_MANIFEST_PUBLIC_KEY_HEX", public_key_hex)
+
+    assert service.load_model() is not None
+    signature_path.unlink()
     assert service.load_model() is None
