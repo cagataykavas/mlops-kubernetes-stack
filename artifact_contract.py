@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,10 +12,13 @@ from typing import Any
 
 import joblib
 import numpy as np
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 MANIFEST_SCHEMA_VERSION = 1
 MAX_ARTIFACT_BYTES = 32 * 1024 * 1024
 MAX_MANIFEST_BYTES = 4096
+MAX_SIGNATURE_ENVELOPE_BYTES = 2048
 REQUIRED_MANIFEST_FIELDS = {
     "schema_version",
     "artifact_sha256",
@@ -23,6 +27,14 @@ REQUIRED_MANIFEST_FIELDS = {
     "classes",
     "model_type",
 }
+REQUIRED_SIGNATURE_FIELDS = {
+    "schema_version",
+    "algorithm",
+    "key_id",
+    "manifest_sha256",
+    "signature_hex",
+}
+KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$")
 
 
 class ArtifactContractError(ValueError):
@@ -47,6 +59,25 @@ class ArtifactManifest:
             "classes": list(self.classes),
             "model_type": self.model_type,
         }
+
+
+@dataclass(frozen=True)
+class ManifestTrustPolicy:
+    key_id: str
+    public_key_hex: str
+
+    def validated_public_key(self) -> Ed25519PublicKey:
+        if not isinstance(self.key_id, str) or not KEY_ID_RE.fullmatch(self.key_id):
+            raise ArtifactContractError("manifest signing key id is invalid")
+        key_bytes = _canonical_hex(
+            self.public_key_hex,
+            expected_bytes=32,
+            field="manifest public key",
+        )
+        try:
+            return Ed25519PublicKey.from_public_bytes(key_bytes)
+        except ValueError as error:
+            raise ArtifactContractError("manifest public key is invalid") from error
 
 
 def qualified_type(value: object) -> str:
@@ -85,8 +116,17 @@ def load_verified_model(
     manifest_path: Path,
     *,
     max_artifact_bytes: int = MAX_ARTIFACT_BYTES,
+    trust_policy: ManifestTrustPolicy | None = None,
+    signature_path: Path | None = None,
 ) -> tuple[object, ArtifactManifest]:
-    manifest = load_manifest(manifest_path)
+    manifest_bytes = _read_regular_file(manifest_path, MAX_MANIFEST_BYTES)
+    if (trust_policy is None) != (signature_path is None):
+        raise ArtifactContractError(
+            "manifest trust policy and signature path must be configured together"
+        )
+    if trust_policy is not None and signature_path is not None:
+        _verify_manifest_signature(manifest_bytes, signature_path, trust_policy)
+    manifest = _parse_manifest(manifest_bytes)
     artifact = _read_regular_file(artifact_path, max_artifact_bytes)
     if len(artifact) != manifest.artifact_size_bytes:
         raise ArtifactContractError("artifact size does not match manifest")
@@ -111,6 +151,10 @@ def load_verified_model(
 
 def load_manifest(path: Path) -> ArtifactManifest:
     raw = _read_regular_file(path, MAX_MANIFEST_BYTES)
+    return _parse_manifest(raw)
+
+
+def _parse_manifest(raw: bytes) -> ArtifactManifest:
     try:
         payload = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -146,6 +190,43 @@ def load_manifest(path: Path) -> ArtifactManifest:
         classes=_binary_classes(payload["classes"]),
         model_type=model_type,
     )
+
+
+def _verify_manifest_signature(
+    manifest_bytes: bytes,
+    signature_path: Path,
+    trust_policy: ManifestTrustPolicy,
+) -> None:
+    public_key = trust_policy.validated_public_key()
+    raw_envelope = _read_regular_file(signature_path, MAX_SIGNATURE_ENVELOPE_BYTES)
+    try:
+        payload = json.loads(
+            raw_envelope,
+            object_pairs_hook=_reject_duplicate_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactContractError(
+            "manifest signature envelope is not valid JSON"
+        ) from error
+    if not isinstance(payload, dict) or set(payload) != REQUIRED_SIGNATURE_FIELDS:
+        raise ArtifactContractError("manifest signature fields do not match schema")
+    if payload["schema_version"] != 1 or payload["algorithm"] != "ed25519":
+        raise ArtifactContractError("unsupported manifest signature scheme")
+    if payload["key_id"] != trust_policy.key_id:
+        raise ArtifactContractError("manifest signature key id is not trusted")
+    manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
+    if payload["manifest_sha256"] != manifest_digest:
+        raise ArtifactContractError("signed manifest digest does not match manifest")
+    signature = _canonical_hex(
+        payload["signature_hex"],
+        expected_bytes=64,
+        field="manifest signature",
+    )
+    try:
+        public_key.verify(signature, manifest_bytes)
+    except InvalidSignature as error:
+        raise ArtifactContractError("manifest signature verification failed") from error
 
 
 def _read_regular_file(path: Path, byte_limit: int) -> bytes:
@@ -214,6 +295,20 @@ def _binary_classes(value: object) -> tuple[int, int]:
     ):
         raise ArtifactContractError("classes must be integer labels 0 and 1")
     return tuple(int(label) for label in classes.tolist())
+
+
+def _canonical_hex(value: object, *, expected_bytes: int, field: str) -> bytes:
+    if (
+        not isinstance(value, str)
+        or len(value) != expected_bytes * 2
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ArtifactContractError(f"{field} must be canonical lowercase hex")
+    return bytes.fromhex(value)
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ArtifactContractError(f"invalid JSON constant in signature envelope: {value}")
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

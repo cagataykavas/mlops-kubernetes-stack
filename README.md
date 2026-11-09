@@ -29,6 +29,7 @@ flowchart LR
 
 - deterministic scikit-learn training artifact;
 - fail-closed artifact digest and model-contract verification before deserialization;
+- optional Ed25519 manifest authentication with a pinned release-signer identity;
 - FastAPI prediction service;
 - separate liveness, readiness and startup probes;
 - Prometheus counters, histogram latency and model-readiness gauge;
@@ -114,11 +115,34 @@ model type with the manifest. Missing, malformed, duplicated-field, oversized,
 mutated, digest-mismatched, or contract-incompatible evidence leaves the pod unready.
 
 This detects accidental corruption and drift between separately delivered artifact
-and manifest files. It does **not** authenticate who approved the manifest: paired
-replacement of both files remains possible unless the manifest digest or signature is
-bound to an immutable image/deployment attestation. Joblib is a code-execution format;
-only artifacts from a trusted build pipeline should enter this verifier. A production
-next step is to sign the manifest and enforce its identity at deployment admission.
+and manifest files. Production mode can additionally require an Ed25519 signature over
+the exact manifest bytes before the manifest is parsed or the joblib artifact is
+deserialized:
+
+```bash
+export REQUIRE_SIGNED_MANIFEST=true
+export MODEL_MANIFEST_SIGNATURE_PATH=/var/run/model-trust/model.manifest.sig.json
+export MODEL_MANIFEST_SIGNING_KEY_ID=release-signer-v1
+export MODEL_MANIFEST_PUBLIC_KEY_HEX=<64-lowercase-hex-characters>
+```
+
+The detached signature envelope contains exactly the schema version, `ed25519`
+algorithm, bounded key ID, manifest SHA-256, and canonical lowercase signature. The
+signature file is read as a bounded regular non-symlink file. Missing trust settings,
+unknown keys, paired artifact/manifest replacement, malformed envelopes, and invalid
+signatures leave readiness closed. The public key and expected key ID should come from
+a protected deployment configuration; they are not secrets. The private key must stay
+in a protected build signer or HSM and must never be injected into the image or pod.
+
+Unsigned mode remains the default for the local synthetic demo. A production overlay
+should set `REQUIRE_SIGNED_MANIFEST=true`, mount the detached signature read-only, and
+pin the public key and key revision through a separately governed configuration path.
+
+Manifest authentication proves approval by the holder of the pinned key, not that the
+model is safe or that the running image is the approved image. A compromised signing
+key can authorize malicious joblib bytes, and joblib is a code-execution format. The
+next step is to bind the accepted manifest digest and signer revision to the immutable
+container-image digest and enforce that tuple in Kubernetes release admission.
 
 ## Inference output contract
 
