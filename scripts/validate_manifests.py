@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
 
 REQUIRED_KINDS = {"Deployment", "Service", "HorizontalPodAutoscaler", "PodDisruptionBudget", "NetworkPolicy"}
+IMAGE_DIGEST = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 
 
 def load_documents() -> list[dict]:
@@ -23,6 +25,8 @@ def main() -> None:
 
     deployment = next(doc for doc in documents if doc.get("kind") == "Deployment")
     container = deployment["spec"]["template"]["spec"]["containers"][0]
+    if IMAGE_DIGEST.fullmatch(container.get("image", "")) is None:
+        raise SystemExit("deployment template image must be digest-pinned")
     probe_paths = {
         container["livenessProbe"]["httpGet"]["path"],
         container["readinessProbe"]["httpGet"]["path"],

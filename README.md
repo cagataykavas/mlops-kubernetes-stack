@@ -40,6 +40,7 @@ flowchart LR
 - dropped Linux capabilities, read-only root filesystem and seccomp runtime-default;
 - pre-stop delay and termination grace period for draining;
 - rollout helper with automatic rollback when deployment status fails;
+- digest-only release rendering and post-rollout image-ID attestation;
 - CI that runs tests, Ruff, manifest checks, Docker build and container health/metrics smoke tests.
 
 ## Local run
@@ -70,16 +71,13 @@ The image trains the public demo artifact at build time and then runs as UID `10
 
 ## Kubernetes
 
-```bash
-kubectl apply -f k8s/deployment.yaml
-kubectl apply -f k8s/resilience.yaml
-```
+Validate the checked-in templates with `python scripts/validate_manifests.py`. The Deployment carries a non-runnable zero-digest placeholder so direct application cannot silently deploy a mutable tag; releases must go through the helper below.
 
 The service starts with two replicas. HPA can scale to eight replicas based on CPU utilization. Scale-down is intentionally slower than scale-up to reduce oscillation.
 
 ### Release and rollback
 
-Use immutable tags or image digests in a real deployment:
+The helper accepts only a lowercase OCI repository reference pinned by a full SHA-256 digest:
 
 ```bash
 python scripts/release.py deploy \
@@ -87,7 +85,7 @@ python scripts/release.py deploy \
   --namespace ml
 ```
 
-If `kubectl rollout status` fails, the helper requests `kubectl rollout undo` and waits for the previous revision to become healthy.
+The helper renders that digest into the Deployment **before the first apply**, records it as a pod-template annotation, waits for rollout completion, and verifies both the live Deployment template and matching pod container image IDs. A mutable tag, malformed namespace/timeout, rollout failure, or digest mismatch fails closed. Rollout or attestation failure requests `kubectl rollout undo` and waits for the previous revision to become healthy.
 
 Manual rollback is also available:
 
@@ -117,6 +115,7 @@ This gives the repository enough structure to discuss request rate, latency dist
 - pre-stop + termination grace time provide a simple connection-draining window.
 - NetworkPolicy narrows traffic instead of leaving every pod implicitly reachable.
 - the container is non-root, cannot escalate privileges, drops capabilities and uses a read-only root filesystem.
+- release input is digest-only and the observed runtime image ID is attested after rollout.
 
 ## Interview topics
 

@@ -35,7 +35,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: api
-          image: ghcr.io/cagataykavas/mlops-kubernetes-stack:latest
+          image: ghcr.io/cagataykavas/mlops-kubernetes-stack@sha256:0000000000000000000000000000000000000000000000000000000000000000
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
