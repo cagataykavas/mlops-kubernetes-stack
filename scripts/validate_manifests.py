@@ -4,7 +4,13 @@ from pathlib import Path
 
 import yaml
 
-REQUIRED_KINDS = {"Deployment", "Service", "HorizontalPodAutoscaler", "PodDisruptionBudget", "NetworkPolicy"}
+REQUIRED_KINDS = {
+    "Deployment",
+    "Service",
+    "HorizontalPodAutoscaler",
+    "PodDisruptionBudget",
+    "NetworkPolicy",
+}
 
 
 def load_documents() -> list[dict]:
@@ -37,6 +43,20 @@ def main() -> None:
         raise SystemExit("container must disable privilege escalation")
     if security.get("readOnlyRootFilesystem") is not True:
         raise SystemExit("container must use a read-only root filesystem")
+
+    pod_spec = deployment["spec"]["template"]["spec"]
+    if pod_spec.get("terminationGracePeriodSeconds", 0) < 25:
+        raise SystemExit(
+            "termination grace period must cover the bounded application drain"
+        )
+    pre_stop = (
+        container.get("lifecycle", {})
+        .get("preStop", {})
+        .get("exec", {})
+        .get("command", [])
+    )
+    if not isinstance(pre_stop, list) or "/health/drain" not in " ".join(pre_stop):
+        raise SystemExit("pre-stop hook must invoke the application drain boundary")
 
     print(f"validated {len(documents)} Kubernetes resources: {sorted(kinds)}")
 
