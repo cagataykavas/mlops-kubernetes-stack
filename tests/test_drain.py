@@ -16,6 +16,13 @@ DrainController = drain.DrainController
 ServiceDraining = drain.ServiceDraining
 
 
+def test_container_copies_drain_runtime() -> None:
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert "COPY train_model.py app.py drain.py ./" in dockerfile
+
+
 def test_drain_waits_for_admitted_work_and_rejects_new_work() -> None:
     controller = DrainController()
     entered = threading.Event()
