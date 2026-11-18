@@ -70,7 +70,15 @@ spec:
           lifecycle:
             preStop:
               exec:
-                command: ["/bin/sh", "-c", "sleep 5"]
+                command:
+                  - /bin/sh
+                  - -c
+                  - >-
+                    python -c 'import urllib.request;
+                    request = urllib.request.Request(
+                    "http://127.0.0.1:8000/health/drain?timeout_seconds=20",
+                    method="POST");
+                    urllib.request.urlopen(request, timeout=22).read()'
           resources:
             requests:
               cpu: "100m"

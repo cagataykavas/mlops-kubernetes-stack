@@ -38,7 +38,7 @@ flowchart LR
 - PodDisruptionBudget;
 - ingress/egress NetworkPolicy;
 - dropped Linux capabilities, read-only root filesystem and seccomp runtime-default;
-- pre-stop delay and termination grace period for draining;
+- application-aware pre-stop drain and termination grace budget;
 - rollout helper with automatic rollback when deployment status fails;
 - CI that runs tests, Ruff, manifest checks, Docker build and container health/metrics smoke tests.
 
@@ -95,9 +95,21 @@ Manual rollback is also available:
 python scripts/release.py rollback --namespace ml
 ```
 
-## Health semantics
+## Health and drain semantics
 
 `/health/live` only answers whether the process is alive. `/health/ready` additionally requires the model artifact to be loaded. Kubernetes therefore stops routing traffic to an unready model without necessarily restarting a healthy process.
+
+Before terminating a pod, the pre-stop hook sends a loopback-only request to
+`POST /health/drain`. The service atomically closes prediction admission, readiness begins
+returning `503`, and the hook waits up to 20 seconds for already admitted predictions. The
+30-second pod grace period leaves a separate budget for Uvicorn shutdown after the drain call.
+Prometheus exposes both `ml_accepting_predictions` and `ml_inflight_predictions` so a rollout can
+distinguish an intentional drain from an unloaded model.
+
+The drain endpoint trusts the pod loopback boundary and this manifest runs one Uvicorn process per
+pod. A multi-worker server would need a shared admission state or one drain signal per worker. The
+bounded wait also cannot prove that a timed-out downstream side effect was cancelled; mutating
+inference dependencies still require idempotency and reconciliation.
 
 ## Observability
 
@@ -106,6 +118,8 @@ python scripts/release.py rollback --namespace ml
 - `ml_predictions_total{predicted_class,model_version}`;
 - `ml_prediction_latency_seconds` histogram;
 - `ml_model_ready` gauge.
+- `ml_accepting_predictions` drain-state gauge;
+- `ml_inflight_predictions` active-work gauge.
 
 This gives the repository enough structure to discuss request rate, latency distributions, rollout comparison by model version and readiness alarms.
 
@@ -114,7 +128,7 @@ This gives the repository enough structure to discuss request rate, latency dist
 - `maxUnavailable: 0` keeps capacity during rolling updates.
 - PDB protects voluntary disruptions from taking every replica down.
 - startup/readiness/liveness probes have different responsibilities.
-- pre-stop + termination grace time provide a simple connection-draining window.
+- pre-stop closes application admission and waits within a smaller budget than pod termination.
 - NetworkPolicy narrows traffic instead of leaving every pod implicitly reachable.
 - the container is non-root, cannot escalate privileges, drops capabilities and uses a read-only root filesystem.
 
